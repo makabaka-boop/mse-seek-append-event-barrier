@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebM/VP8 分片播放器（单 SourceBuffer 串行协调）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; }
+  video { width: 480px; max-width: 100%; background: #000; display: block; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  button { padding: 4px 10px; cursor: pointer; }
+  input[type=number] { width: 90px; }
+  #err { background: #8b1a1a; color: #fff; padding: 6px 10px; border-radius: 4px; display: none; }
+  table.segs { border-collapse: collapse; margin: 8px 0; }
+  table.segs td, table.segs th { border: 1px solid #8885; padding: 3px 8px; text-align: center; min-width: 64px; }
+  table.segs th { background: #8882; }
+  td.playable { background: #1a7f37; color: #fff; }
+  td.notplayable { background: #8882; color: #888; }
+  #bufbar { position: relative; height: 14px; background: #8883; border-radius: 3px; overflow: hidden; width: 480px; max-width: 100%; }
+  #bufbar > div { position: absolute; top: 0; bottom: 0; background: #1a7f37; }
+  #bufbar > i { position: absolute; top: 0; bottom: 0; width: 2px; background: #d33; }
+  #log { background: #8881; border-radius: 4px; padding: 8px; height: 220px; overflow: auto;
+         font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; }
+  #log .err { color: #e5534b; font-weight: 600; }
+  .hint { color: #888; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>WebM/VP8 分片播放器 <span id="mime" class="hint"></span></h1>
+<p class="hint">固定清单：初始化段 + 6 个关键帧起始媒体段（各 1s，绝对时间戳）。单个视频 SourceBuffer；
+追加与 remove 经同一协调器串行。可播放标记只读真实 <code>video.buffered</code>，与协调器账本分列对照。</p>
+
+<div class="row">
+  <label>片段请求延迟 <input id="delay" type="number" value="0" min="0" step="50"> ms</label>
+  <button id="start">开始加载</button>
+  <button id="stop">停止</button>
+  <button id="rebuild">停止并重建 MediaSource</button>
+</div>
+<div class="row" id="seekrow">跳播：</div>
+
+<video id="video" controls muted></video>
+
+<div id="err"></div>
+
+<table class="segs" id="segtable">
+  <tr><th>段</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th></tr>
+  <tr id="ledger"><th>协调器账本</th></tr>
+  <tr id="playable"><th>可播放(真实buffered)</th></tr>
+</table>
+<div id="bufbar"></div>
+<p class="hint" id="buftext"></p>
+
+<div id="log"></div>
+
+<script src="coordinator.js"></script>
+<script src="player.js"></script>
+</body>
+</html>

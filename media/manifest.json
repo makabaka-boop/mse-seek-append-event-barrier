@@ -1,0 +1,13 @@
+{
+  "init": "init.webm",
+  "mimeType": "video/webm; codecs=\"vp8\"",
+  "comment": "固定清单：6 个关键帧起始媒体段，各 1s，绝对时间戳；由 tools/generate-media.sh 可复现生成",
+  "segments": [
+    { "seq": 1, "url": "seg-1.webm", "start": 0, "end": 1 },
+    { "seq": 2, "url": "seg-2.webm", "start": 1, "end": 2 },
+    { "seq": 3, "url": "seg-3.webm", "start": 2, "end": 3 },
+    { "seq": 4, "url": "seg-4.webm", "start": 3, "end": 4 },
+    { "seq": 5, "url": "seg-5.webm", "start": 4, "end": 5 },
+    { "seq": 6, "url": "seg-6.webm", "start": 5, "end": 6 }
+  ]
+}

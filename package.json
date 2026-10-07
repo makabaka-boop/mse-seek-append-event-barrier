@@ -1,0 +1,14 @@
+{
+  "name": "webm-fragment-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "纯浏览器 WebM/VP8 分片播放器：单 SourceBuffer 上串行协调追加/删除/跳播",
+  "scripts": {
+    "test": "node --test tests/",
+    "test:browser": "node tests/run-browser-mse.js",
+    "start": "docker compose up web"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.2"
+  }
+}

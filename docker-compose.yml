@@ -1,0 +1,28 @@
+# Compose 编排：托管页面与本地媒体资源；媒体可复现生成；协调器测试。
+#
+#   docker compose up web        # 打开 http://localhost:8080/ （自测页 /test-mse.html）
+#   docker compose run media-gen # 重新生成 media/ 并与 media.sha256 比对（需联网下载固定版 ffmpeg）
+#   docker compose run test      # 运行 SourceBuffer 替身测试（node --test）
+
+services:
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./public:/usr/share/nginx/html:ro
+      - ./media:/usr/share/nginx/html/media:ro
+
+  media-gen:
+    image: alpine:3.20
+    working_dir: /work
+    volumes:
+      - ./:/work
+    command: sh tools/generate-media.sh
+
+  test:
+    image: node:20-alpine
+    working_dir: /work
+    volumes:
+      - ./:/work
+    command: node --test tests/

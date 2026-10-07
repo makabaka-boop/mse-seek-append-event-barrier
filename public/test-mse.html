@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MSE-TEST: RUNNING</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, monospace; }
+  #out { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>真实 MSE 场景自测：加载 → 跳播 → 停止重建</h1>
+<video id="v" muted width="320"></video>
+<pre id="out"></pre>
+<script src="coordinator.js"></script>
+<script>
+(async () => {
+  'use strict';
+  const out = document.getElementById('out');
+  const video = document.getElementById('v');
+  const lines = [];
+  const results = [];
+  const log = (m) => { lines.push(m); out.textContent = lines.join('\n'); };
+  const check = (name, cond, detail) => {
+    results.push({ name, ok: !!cond });
+    log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleepAbort = (ms, signal) => new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    if (signal) signal.addEventListener('abort', () => {
+      clearTimeout(t);
+      reject(new DOMException('aborted', 'AbortError'));
+    });
+  });
+  const ranges = () => {
+    const a = [];
+    for (let i = 0; i < video.buffered.length; i++) {
+      a.push([video.buffered.start(i), video.buffered.end(i)]);
+    }
+    return a;
+  };
+  const inRanges = (t) => ranges().some(([s, e]) => t >= s - 0.05 && t <= e + 0.05);
+  const fmt = (rs) => rs.map(([s, e]) => `[${s.toFixed(2)},${e.toFixed(2)})`).join(' ') || '(空)';
+
+  setTimeout(() => {
+    if (document.title === 'MSE-TEST: RUNNING') {
+      log('FAIL  场景超时');
+      document.title = 'MSE-TEST: FAIL';
+    }
+  }, 45000);
+
+  try {
+    const manifest = await (await fetch('media/manifest.json')).json();
+    if (!window.MediaSource || !MediaSource.isTypeSupported(manifest.mimeType)) {
+      throw new Error('MSE 不支持 ' + manifest.mimeType);
+    }
+    const initBytes = new Uint8Array(await (await fetch('media/' + manifest.init)).arrayBuffer());
+    const DELAY_MS = 150; // 片段请求人为延迟，制造在飞请求与跳播交错
+    const errors = [];
+
+    const coord = MseCoordinator.createCoordinator({
+      manifest,
+      keepBehindSec: 2,
+      lookahead: 3,
+      getBuffered: () => ranges().map(([start, end]) => ({ start, end })),
+      getCurrentTime: () => video.currentTime,
+      loadSegment: async (seq, signal) => {
+        const seg = manifest.segments[seq - 1];
+        const [resp] = await Promise.all([
+          fetch('media/' + seg.url, { signal }),
+          sleepAbort(DELAY_MS, signal),
+        ]);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return new Uint8Array(await resp.arrayBuffer());
+      },
+      onError: (e) => { errors.push(e); log(`ERROR 段${e.seq} @ ${e.stage}: ${e.message}`); },
+      onLog: (m) => log('  | ' + m),
+    });
+
+    const openMs = () => new Promise((resolve, reject) => {
+      const ms = new MediaSource();
+      const url = URL.createObjectURL(ms);
+      video.src = url;
+      ms.addEventListener('sourceopen', () => {
+        ms.duration = manifest.segments[manifest.segments.length - 1].end;
+        resolve({ ms, url, sb: ms.addSourceBuffer(manifest.mimeType) });
+      }, { once: true });
+      ms.addEventListener('error', () => reject(new Error('MediaSource error')), { once: true });
+    });
+    const teardownMs = (sess) => {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(sess.url);
+    };
+
+    // ---- 第一程：加载段 1-2 ------------------------------------------------
+    const sess1 = await openMs();
+    coord.startSession(sess1.sb);
+    coord.appendInit(initBytes);
+    coord.ensure(1, 2);
+    await coord.whenIdle();
+    check('初始加载：真实 buffered 覆盖段1-2', inRanges(0.5) && inRanges(1.5), fmt(ranges()));
+    check('初始加载：段3 尚未缓冲', !inRanges(2.5), fmt(ranges()));
+
+    // ---- 跳播：先调度段3、4（制造在飞请求），随即跳到段5 --------------------
+    coord.ensure(3, 2);
+    await sleep(30); // 让段3请求起飞但未必完成
+    video.currentTime = 4.0;
+    coord.seekTo(4.0);
+    await coord.whenIdle();
+    check('跳播后：目标段5、6 已缓冲', inRanges(4.5) && inRanges(5.5), fmt(ranges()));
+    check('跳播后：旧数据 [0,2) 已清除', !inRanges(0.5) && !inRanges(1.5), fmt(ranges()));
+    check('账本：段5、6 完成', coord.isAppended(5) && coord.isAppended(6));
+    check('账本：段1、2 完成标记已清除', !coord.isAppended(1) && !coord.isAppended(2));
+
+    // ---- 可播放标记 ⇔ 真实 buffered ---------------------------------------
+    const playableSeqs = manifest.segments
+      .filter((s) => inRanges(s.start + 0.5))
+      .map((s) => s.seq);
+    const ledgerSeqs = manifest.segments
+      .map((s) => s.seq)
+      .filter((seq) => coord.isAppended(seq));
+    check('可播放标记与真实 buffered 一致',
+      JSON.stringify(playableSeqs) === JSON.stringify(ledgerSeqs),
+      `可播放=${JSON.stringify(playableSeqs)} 账本=${JSON.stringify(ledgerSeqs)}`);
+
+    // ---- 实际播放一小段 -----------------------------------------------------
+    video.currentTime = 4.0;
+    await video.play().catch((e) => log('  | play() 未获准: ' + e.message));
+    await sleep(900);
+    check('播放推进（currentTime > 4.0）', video.currentTime > 4.05,
+      `currentTime=${video.currentTime.toFixed(2)} paused=${video.paused}`);
+
+    // ---- 停止并重建：旧事件彻底失效 -----------------------------------------
+    const oldSb = sess1.sb;
+    coord.stop();
+    oldSb.dispatchEvent(new Event('updateend')); // 合成事件打到已拆除的旧 SourceBuffer
+    oldSb.dispatchEvent(new Event('abort'));
+    const snapAfterStop = JSON.stringify(coord.snapshot());
+    teardownMs(sess1);
+    check('停止后：账本已清空', JSON.parse(snapAfterStop).appended.length === 0, snapAfterStop);
+    check('停止后：buffered 已清空', video.buffered.length === 0, fmt(ranges()));
+
+    const sess2 = await openMs();
+    coord.startSession(sess2.sb);
+    coord.appendInit(initBytes);
+    coord.ensure(1, 1);
+    await coord.whenIdle();
+    check('重建后：重新加载段1', inRanges(0.5), fmt(ranges()));
+    check('重建后：段2 未缓冲', !inRanges(1.5), fmt(ranges()));
+    check('全程无协调器错误', errors.length === 0, JSON.stringify(errors));
+  } catch (e) {
+    check('场景完成', false, (e && e.message) || String(e));
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  log(failed.length ? `结果: FAIL (${failed.length}/${results.length})` : `结果: 全部通过 (${results.length} 项)`);
+  document.title = failed.length ? 'MSE-TEST: FAIL' : 'MSE-TEST: PASS';
+})();
+</script>
+</body>
+</html>
